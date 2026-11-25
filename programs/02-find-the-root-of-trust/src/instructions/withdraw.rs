@@ -40,7 +40,7 @@ pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
     let signature_check = load_instruction_unchecked(0, &ctx.accounts.instructions)?;
     let signed = parse_ed25519(&signature_check)?;
     require!(
-        ctx.accounts.config.allowed_keys.contains(&signed.pubkey),
+        ctx.accounts.config.keys.contains(&signed.pubkey),
         VaultError::KeyNotAllowed
     );
     let expected = withdrawal_message(
@@ -66,4 +66,3 @@ pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
         ctx.accounts.mint.decimals,
     )
 }
-

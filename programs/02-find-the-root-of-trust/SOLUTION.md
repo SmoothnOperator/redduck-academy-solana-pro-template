@@ -31,16 +31,15 @@ The root of trust is now the **`config` PDA** (`seeds = [b"config"], bump = conf
 
 - **Why the caller cannot create it:** The `config` account is a Program Derived Address deterministically derived from the program ID and the seed `b"config"`. It is initialized strictly once by the admin during `initialize`. Because it has no private key and lies off the Ed25519 curve, only this program can create or mutate it. Anchor's account constraint `#[account(seeds = [b"config"], bump = config.bump)]` enforces that any supplied account matches the canonical PDA.
 - **How every other check in `withdraw` depends on it:**
-  1. **Allowed oracle keys moved into the root:** The allowed oracle public keys are stored directly inside `config.allowed_keys: Vec<Pubkey>`. The external caller-supplied `Allowlist` account has been eliminated.
+  1. **Allowed oracle keys moved into the root:** The allowed oracle public keys are stored directly inside `config.keys: Vec<Pubkey>`. The external caller-supplied `Allowlist` account has been eliminated.
   2. **Sysvar address validation:** The `instructions` account is verified against the real sysvar address `anchor_lang::solana_program::sysvar::instructions::ID` both via `#[account(address = ...)]` and `require_keys_eq!` before any bytes are read.
-  3. **Ed25519 check against config:** The public key extracted from the genuine instructions sysvar is validated against `ctx.accounts.config.allowed_keys`.
+  3. **Ed25519 check against config:** The public key extracted from the genuine instructions sysvar is validated against `ctx.accounts.config.keys`.
   4. **Vault & Mint validation:** The token mint is verified against `config.mint`, and the vault PDA authority seeds for CPI transfer are derived from `config`.
 
 ## One root for every instruction
 
 Every instruction in the program anchors into the identical `config` PDA:
 
-- **`initialize`**: Derives and initializes the single `config` PDA (`seeds = [b"config"]`), recording the admin, the token mint, and the initial `allowed_keys`.
+- **`initialize`**: Derives and initializes the single `config` PDA (`seeds = [b"config"]`), recording the admin, the token mint, and the initial `keys`.
 - **`deposit`**: Enforces `#[account(seeds = [b"config"], bump = config.bump)]`, verifies that the deposit token mint matches `config.mint` (`#[account(address = config.mint)]`), and transfers tokens into the vault PDA.
-- **`withdraw`**: Enforces the same `#[account(seeds = [b"config"], bump = config.bump)]`, verifies `mint` against `config.mint`, verifies the signer against `config.allowed_keys`, and signs the outgoing transfer using the `config` PDA bump seed.
-
+- **`withdraw`**: Enforces the same `#[account(seeds = [b"config"], bump = config.bump)]`, verifies `mint` against `config.mint`, verifies the signer against `config.keys`, and signs the outgoing transfer using the `config` PDA bump seed.

@@ -4,7 +4,7 @@ use anchor_spl::token::{Mint, Token, TokenAccount};
 use crate::{Config, VaultError, MAX_KEYS};
 
 #[derive(Accounts)]
-#[instruction(allowed_keys: Vec<Pubkey>)]
+#[instruction(keys: Vec<Pubkey>)]
 pub struct Initialize<'info> {
     #[account(mut)]
     pub admin: Signer<'info>,
@@ -30,14 +30,13 @@ pub struct Initialize<'info> {
     pub system_program: Program<'info, System>,
 }
 
-pub fn initialize(ctx: Context<Initialize>, allowed_keys: Vec<Pubkey>) -> Result<()> {
-    require!(allowed_keys.len() <= MAX_KEYS, VaultError::TooManyKeys);
+pub fn initialize(ctx: Context<Initialize>, keys: Vec<Pubkey>) -> Result<()> {
+    require!(keys.len() <= MAX_KEYS, VaultError::TooManyKeys);
     ctx.accounts.config.set_inner(Config {
         admin: ctx.accounts.admin.key(),
         mint: ctx.accounts.mint.key(),
-        allowed_keys,
+        keys,
         bump: ctx.bumps.config,
     });
     Ok(())
 }
-

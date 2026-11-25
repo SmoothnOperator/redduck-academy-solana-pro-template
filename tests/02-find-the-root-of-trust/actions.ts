@@ -40,6 +40,7 @@ export const withdraw = async (
     .withdraw(amount)
     .accountsPartial({
       caller: env.payer.publicKey,
+      allowlist: env.allowlist,
       mint: env.mint,
       recipientTokens,
       instructions,
@@ -48,4 +49,3 @@ export const withdraw = async (
     .instruction();
   await sendIxs(env.context, [env.payer], signatureCheck, ix);
 };
-
