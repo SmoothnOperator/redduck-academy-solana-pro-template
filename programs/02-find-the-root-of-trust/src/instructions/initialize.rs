@@ -1,13 +1,20 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount};
 
-use crate::Config;
+use crate::{Config, VaultError, MAX_KEYS};
 
 #[derive(Accounts)]
+#[instruction(allowed_keys: Vec<Pubkey>)]
 pub struct Initialize<'info> {
     #[account(mut)]
     pub admin: Signer<'info>,
-    #[account(init, payer = admin, space = 8 + Config::INIT_SPACE, seeds = [b"config"], bump)]
+    #[account(
+        init,
+        payer = admin,
+        space = 8 + Config::INIT_SPACE,
+        seeds = [b"config"],
+        bump
+    )]
     pub config: Account<'info, Config>,
     pub mint: Account<'info, Mint>,
     #[account(
@@ -23,11 +30,14 @@ pub struct Initialize<'info> {
     pub system_program: Program<'info, System>,
 }
 
-pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
+pub fn initialize(ctx: Context<Initialize>, allowed_keys: Vec<Pubkey>) -> Result<()> {
+    require!(allowed_keys.len() <= MAX_KEYS, VaultError::TooManyKeys);
     ctx.accounts.config.set_inner(Config {
         admin: ctx.accounts.admin.key(),
         mint: ctx.accounts.mint.key(),
+        allowed_keys,
         bump: ctx.bumps.config,
     });
     Ok(())
 }
+

@@ -1,8 +1,49 @@
 import { assert } from "chai";
+import {
+  Ed25519Program,
+  Keypair,
+  PublicKey,
+  SystemProgram,
+} from "@solana/web3.js";
+import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
-import { oneToken, tokenBalance } from "../helpers";
+import { expectReverted, oneToken, tokenBalance, sendIxs } from "../helpers";
 import { VaultFixture, setupVault } from "./fixture";
-import { withdraw } from "./actions";
+import { withdraw, withdrawalMessage } from "./actions";
+
+/**
+ * Builds a byte buffer with the exact layout expected by `load_instruction_unchecked`:
+ * - u16 count of instructions (1)
+ * - u16 offset of instruction 0 (4)
+ * - u16 accounts length (0)
+ * - 32 bytes program id (Ed25519Program.programId)
+ * - u16 data length
+ * - raw instruction data
+ */
+export function buildFakeInstructionsSysvar(ed25519IxData: Buffer): Buffer {
+  const countBuf = Buffer.alloc(2);
+  countBuf.writeUInt16LE(1, 0);
+
+  const offsetBuf = Buffer.alloc(2);
+  offsetBuf.writeUInt16LE(4, 0);
+
+  const numAccountsBuf = Buffer.alloc(2);
+  numAccountsBuf.writeUInt16LE(0, 0);
+
+  const programIdBuf = Ed25519Program.programId.toBuffer();
+
+  const dataLenBuf = Buffer.alloc(2);
+  dataLenBuf.writeUInt16LE(ed25519IxData.length, 0);
+
+  return Buffer.concat([
+    countBuf,
+    offsetBuf,
+    numAccountsBuf,
+    programIdBuf,
+    dataLenBuf,
+    ed25519IxData,
+  ]);
+}
 
 describe("02-find-the-root-of-trust", () => {
   let env: VaultFixture;
@@ -22,4 +63,84 @@ describe("02-find-the-root-of-trust", () => {
       oneToken().muln(900).toString(),
     );
   });
+
+  it("exploit test: rejects a withdrawal using a fake instructions account (shows hole closed)", async () => {
+    const fakeOracle = Keypair.generate();
+    const amount = oneToken().muln(100);
+
+    const ed25519Ix = Ed25519Program.createInstructionWithPrivateKey({
+      privateKey: fakeOracle.secretKey,
+      message: withdrawalMessage(env.vault, env.payerTokens, amount),
+    });
+
+    const fakeSysvarData = buildFakeInstructionsSysvar(ed25519Ix.data);
+    const fakeSysvar = Keypair.generate();
+
+    // Inject fake instructions sysvar account into the bankrun context
+    env.context.setAccount(fakeSysvar.publicKey, {
+      lamports: 1_000_000_000,
+      data: fakeSysvarData,
+      owner: SystemProgram.programId,
+      executable: false,
+      rentEpoch: 0,
+    });
+
+    // Before fix, passing fakeSysvar would drain the vault.
+    // After fix, the program verifies instructions account == sysvar::instructions::ID and fails.
+    const ix = await env.program.methods
+      .withdraw(amount)
+      .accountsPartial({
+        caller: env.payer.publicKey,
+        mint: env.mint,
+        recipientTokens: env.payerTokens,
+        instructions: fakeSysvar.publicKey,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .instruction();
+
+    await expectReverted(
+      { revertedWith: { message: "ConstraintAddress" } },
+      sendIxs(env.context, [env.payer], ix),
+    );
+  });
+
+  it("rejects a withdrawal with a wrong instructions account address", async () => {
+    const randomAccount = Keypair.generate().publicKey;
+    await expectReverted(
+      { revertedWith: { message: "ConstraintAddress" } },
+      withdraw(env, oneToken().muln(50), env.payerTokens, env.oracle, randomAccount),
+    );
+  });
+
+  it("rejects an unauthorized signer not in config allowed_keys", async () => {
+    const unauthorizedOracle = Keypair.generate();
+    await expectReverted(
+      { revertedWith: { message: "KeyNotAllowed" } },
+      withdraw(env, oneToken().muln(50), env.payerTokens, unauthorizedOracle),
+    );
+  });
+
+  it("rejects a withdrawal when the signed message does not match the withdrawal parameters", async () => {
+    const amount = oneToken().muln(50);
+    const differentAmount = oneToken().muln(100);
+
+    // Oracle signs for differentAmount, but caller requests `amount`
+    const mismatchedSigCheck = Ed25519Program.createInstructionWithPrivateKey({
+      privateKey: env.oracle.secretKey,
+      message: withdrawalMessage(env.vault, env.payerTokens, differentAmount),
+    });
+
+    await expectReverted(
+      { revertedWith: { message: "MessageMismatch" } },
+      withdraw(
+        env,
+        amount,
+        env.payerTokens,
+        env.oracle,
+        undefined,
+        mismatchedSigCheck,
+      ),
+    );
+  });
 });
+
