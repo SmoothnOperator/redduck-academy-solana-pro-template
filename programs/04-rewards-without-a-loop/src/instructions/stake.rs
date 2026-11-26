@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{transfer_checked, Mint, Token, TokenAccount, TransferChecked};
 
-use crate::{instructions::settle_staker, Pool, PoolError, Staker};
+use crate::{Pool, PoolError, Staker, REWARD_PRECISION};
 
 #[derive(Accounts)]
 pub struct Stake<'info> {
@@ -49,9 +49,24 @@ pub fn stake(ctx: Context<Stake>, amount: u64) -> Result<()> {
     )?;
 
     // Settle rewards owed on the prior stake BEFORE increasing `staker.stake`.
-    let reward_per_token = ctx.accounts.pool.reward_per_token;
+    let pool_reward_per_token = ctx.accounts.pool.reward_per_token;
     let staker = &mut ctx.accounts.staker;
-    settle_staker(staker, reward_per_token)?;
+    let delta = pool_reward_per_token
+        .checked_sub(staker.reward_per_token_paid)
+        .ok_or(PoolError::MathOverflow)?;
+    if staker.stake > 0 && delta > 0 {
+        let earned = (staker.stake as u128)
+            .checked_mul(delta)
+            .ok_or(PoolError::MathOverflow)?
+            .checked_div(REWARD_PRECISION)
+            .ok_or(PoolError::MathOverflow)?;
+        let earned_u64 = u64::try_from(earned).map_err(|_| PoolError::MathOverflow)?;
+        staker.pending = staker
+            .pending
+            .checked_add(earned_u64)
+            .ok_or(PoolError::MathOverflow)?;
+    }
+    staker.reward_per_token_paid = pool_reward_per_token;
 
     staker.owner = ctx.accounts.owner.key();
     staker.bump = ctx.bumps.staker;

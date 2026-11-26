@@ -339,4 +339,47 @@ describe("04-rewards-without-a-loop", () => {
       oneToken().muln(50).toString(),
     );
   });
+
+  it("explicitly verifies a claim when nothing is owed succeeds without error or transfer", async () => {
+    const [a] = env.stakers;
+    await stake(env, a, oneToken().muln(100));
+
+    // Case 1: Initial claim when nothing is owed (fresh stake, no rewards added)
+    const before1 = await tokenBalance(env.context, a.tokens);
+    await claim(env, a);
+    const after1 = await tokenBalance(env.context, a.tokens);
+    assert.equal(
+      (after1 - before1).toString(),
+      "0",
+      "Claiming with zero rewards owed must transfer zero tokens",
+    );
+
+    // Case 2: Consecutive claim immediately after claiming pending rewards
+    await addRewardsNoLoop(env, oneToken().muln(50));
+    await claim(env, a);
+
+    const before2 = await tokenBalance(env.context, a.tokens);
+    await claim(env, a);
+    const after2 = await tokenBalance(env.context, a.tokens);
+    assert.equal(
+      (after2 - before2).toString(),
+      "0",
+      "Consecutive claim with zero rewards owed must transfer zero tokens",
+    );
+
+    // Case 3: Claim when fully withdrawn and zero rewards owed
+    await unstake(env, a, oneToken().muln(100));
+    const before3 = await tokenBalance(env.context, a.tokens);
+    await claim(env, a);
+    const after3 = await tokenBalance(env.context, a.tokens);
+    assert.equal(
+      (after3 - before3).toString(),
+      "0",
+      "Claim with zero stake and zero owed must transfer zero tokens",
+    );
+
+    const aState = await env.program.account.staker.fetch(a.account);
+    assert.equal(aState.pending.toString(), "0");
+    assert.equal(aState.stake.toString(), "0");
+  });
 });
