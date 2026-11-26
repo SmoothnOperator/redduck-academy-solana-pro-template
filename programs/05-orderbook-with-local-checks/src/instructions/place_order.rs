@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{transfer_checked, Mint, Token, TokenAccount, TransferChecked};
 
-use crate::{Book, BookError, NONE};
+use crate::{Book, BookError, CELLS, NONE};
 
 #[derive(Accounts)]
 pub struct PlaceOrder<'info> {
@@ -18,12 +18,12 @@ pub struct PlaceOrder<'info> {
 }
 
 /// Places an order. `hint` is the cell the new order should go after, or `None` for the head.
-/// The given program ignores the hint and walks the list from the head instead.
+/// Verifies the local ordering around `hint` in O(1) without looping over the book.
 pub fn place_order(
     ctx: Context<PlaceOrder>,
     price: u64,
     size: u64,
-    _hint: Option<u16>,
+    hint: Option<u16>,
 ) -> Result<()> {
     transfer_checked(
         CpiContext::new(
@@ -42,16 +42,43 @@ pub fn place_order(
     let mut book = ctx.accounts.book.load_mut()?;
     let cell = book.free_head;
     require!(cell != NONE, BookError::BookFull);
-    book.free_head = book.cells[cell as usize].next;
 
-    // Walk from the head until the next order is cheaper than the new one. Older orders at the
-    // same price stay in front. This is the O(n) part.
-    let mut after = NONE;
-    let mut cursor = book.head;
-    while cursor != NONE && book.cells[cursor as usize].price >= price {
-        after = cursor;
-        cursor = book.cells[cursor as usize].next;
-    }
+    // Validate the hint in O(1) with local neighbor checks:
+    let after = match hint {
+        None => {
+            // New order goes at the head: the head must be empty (NONE) or strictly cheaper.
+            if book.head != NONE {
+                require!((book.head as usize) < CELLS, BookError::BadHint);
+                let head = &book.cells[book.head as usize];
+                require!(head.alive == 1 && head.price < price, BookError::BadHint);
+            }
+            NONE
+        }
+        Some(hint_idx) => {
+            // New order goes after `hint_idx`:
+            // 1. Hint cell must be within bounds and alive.
+            require!((hint_idx as usize) < CELLS, BookError::BadHint);
+            let hint_cell = &book.cells[hint_idx as usize];
+            require!(hint_cell.alive == 1, BookError::BadHint);
+
+            // 2. The order before (the hint) must not be cheaper than the new order.
+            require!(hint_cell.price >= price, BookError::BadHint);
+
+            // 3. The order after must be NONE (tail) or alive with a price strictly below the new price.
+            let next_idx = hint_cell.next;
+            if next_idx != NONE {
+                require!((next_idx as usize) < CELLS, BookError::BadHint);
+                let next_cell = &book.cells[next_idx as usize];
+                require!(
+                    next_cell.alive == 1 && next_cell.price < price,
+                    BookError::BadHint
+                );
+            }
+            hint_idx
+        }
+    };
+
+    book.free_head = book.cells[cell as usize].next;
 
     link(
         &mut book,
