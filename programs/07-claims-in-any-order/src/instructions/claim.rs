@@ -4,8 +4,9 @@ use anchor_spl::token::{transfer_checked, Mint, Token, TokenAccount, TransferChe
 
 use crate::{parse_ed25519, ClaimError, Config, Device};
 
-/// Pays one day's reward. The oracle signs (device, amount, nonce); the nonce has to be the
-/// next one, so a message cannot be replayed and two messages cannot swap places.
+/// Pays rewards based on cumulative total earned signed by the oracle.
+/// The device stores how much was already paid; a claim pays the difference
+/// and advances the paid amount to the signed total. If total <= paid, changes nothing.
 #[derive(Accounts)]
 pub struct Claim<'info> {
     pub caller: Signer<'info>,
@@ -19,21 +20,21 @@ pub struct Claim<'info> {
     pub owner_tokens: Account<'info, TokenAccount>,
     #[account(mut, seeds = [b"vault"], bump)]
     pub vault: Account<'info, TokenAccount>,
-    /// CHECK: the instructions sysvar; its address is checked when the instruction is loaded.
+    /// CHECK: the instructions sysvar; its address is verified before reading from it.
+    #[account(address = anchor_lang::solana_program::sysvar::instructions::ID)]
     pub instructions: UncheckedAccount<'info>,
     pub token_program: Program<'info, Token>,
 }
 
-/// The message the oracle signs for one claim: device, amount, nonce.
-pub fn claim_message(device: &Pubkey, amount: u64, nonce: u64) -> Vec<u8> {
-    let mut message = Vec::with_capacity(48);
+/// The message the oracle signs for a claim: device pubkey and cumulative total earned.
+pub fn claim_message(device: &Pubkey, total: u64) -> Vec<u8> {
+    let mut message = Vec::with_capacity(40);
     message.extend_from_slice(device.as_ref());
-    message.extend_from_slice(&amount.to_le_bytes());
-    message.extend_from_slice(&nonce.to_le_bytes());
+    message.extend_from_slice(&total.to_le_bytes());
     message
 }
 
-pub fn claim(ctx: Context<Claim>, amount: u64, nonce: u64) -> Result<()> {
+pub fn claim(ctx: Context<Claim>, total: u64) -> Result<()> {
     let signature_check = load_instruction_at_checked(0, &ctx.accounts.instructions)?;
     let signed = parse_ed25519(&signature_check)?;
     require_keys_eq!(
@@ -41,12 +42,19 @@ pub fn claim(ctx: Context<Claim>, amount: u64, nonce: u64) -> Result<()> {
         ctx.accounts.config.oracle,
         ClaimError::WrongSigner
     );
-    let expected = claim_message(&ctx.accounts.device.key(), amount, nonce);
+    let expected = claim_message(&ctx.accounts.device.key(), total);
     require!(signed.message == expected, ClaimError::MessageMismatch);
 
     let device = &mut ctx.accounts.device;
-    require!(nonce == device.nonce + 1, ClaimError::BadNonce);
-    device.nonce = nonce;
+    if total <= device.paid {
+        // A message with a total at or below the paid amount changes nothing.
+        return Ok(());
+    }
+
+    let amount = total
+        .checked_sub(device.paid)
+        .ok_or(ClaimError::MathOverflow)?;
+    device.paid = total;
 
     let seeds: &[&[u8]] = &[b"config", &[ctx.accounts.config.bump]];
     transfer_checked(
