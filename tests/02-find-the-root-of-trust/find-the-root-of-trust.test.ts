@@ -11,7 +11,7 @@ import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
 import { expectReverted, oneToken, tokenBalance, sendIxs } from "../helpers";
 import { VaultFixture, setupVault } from "./fixture";
-import { withdraw, withdrawalMessage } from "./actions";
+import { withdraw, withdrawalMessage, deposit } from "./actions";
 
 /**
  * Builds a byte buffer with the exact layout expected by `load_instruction_unchecked`:
@@ -108,15 +108,24 @@ describe("02-find-the-root-of-trust", () => {
 
     // 4. In the unfixed program, withdrawing with fakeSysvar and fakeAllowlist succeeds in draining the vault.
     // In the fixed program, instructions is validated against sysvar::instructions::ID and rejected.
+    // We actually pass fakeAllowlist both in accountsPartial and in remainingAccounts.
     const ix = await env.program.methods
       .withdraw(amount)
       .accountsPartial({
         caller: env.payer.publicKey,
+        allowlist: fakeAllowlist.publicKey,
         mint: env.mint,
         recipientTokens: env.payerTokens,
         instructions: fakeSysvar.publicKey,
         tokenProgram: TOKEN_PROGRAM_ID,
       })
+      .remainingAccounts([
+        {
+          pubkey: fakeAllowlist.publicKey,
+          isWritable: false,
+          isSigner: false,
+        },
+      ])
       .instruction();
 
     await expectReverted(
@@ -198,15 +207,7 @@ describe("02-find-the-root-of-trust", () => {
 
   it("verifies deposit adds funds to the vault PDA using the config mint", async () => {
     const vaultBefore = await tokenBalance(env.context, env.vault);
-    const depositIx = await env.program.methods
-      .deposit(oneToken().muln(200))
-      .accountsPartial({
-        depositor: env.payer.publicKey,
-        mint: env.mint,
-        depositorTokens: env.payerTokens,
-      })
-      .instruction();
-    await sendIxs(env.context, [env.payer], depositIx);
+    await deposit(env, oneToken().muln(200));
     const vaultAfter = await tokenBalance(env.context, env.vault);
     assert.equal((vaultAfter - vaultBefore).toString(), oneToken().muln(200).toString());
   });

@@ -23,6 +23,24 @@ export const withdrawalMessage = (
     amount.toArrayLike(Buffer, "le", 8),
   ]);
 
+export const deposit = async (
+  env: VaultFixture,
+  amount: BN,
+  depositor: Keypair = env.payer,
+  depositorTokens: PublicKey = env.payerTokens,
+) => {
+  const ix = await env.program.methods
+    .deposit(amount)
+    .accountsPartial({
+      depositor: depositor.publicKey,
+      mint: env.mint,
+      depositorTokens,
+      tokenProgram: TOKEN_PROGRAM_ID,
+    })
+    .instruction();
+  await sendIxs(env.context, [depositor], ix);
+};
+
 export const withdraw = async (
   env: VaultFixture,
   amount: BN,
