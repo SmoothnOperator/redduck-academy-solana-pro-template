@@ -1,7 +1,14 @@
 import { assert } from "chai";
-import { SystemProgram } from "@solana/web3.js";
+import { Keypair, SystemProgram, Transaction } from "@solana/web3.js";
 
-import { getTime, numToHex, oneToken, timeTravel, tokenBalance } from "../helpers";
+import {
+  getTime,
+  numToHex,
+  oneToken,
+  processTransaction,
+  timeTravel,
+  tokenBalance,
+} from "../helpers";
 import { MultisigFixture, setupMultisig } from "./fixture";
 import { approve, cancel, createProposal, execute, treasuryTransfer } from "./actions";
 
@@ -24,6 +31,40 @@ const expectMultisigError = async (
     );
   }
   throw new Error(`Expected revert with ${errorName}, but succeeded`);
+};
+
+/** Freshly generates a stranger keypair, verifies it is outside the multisig member set, and funds it with SOL. */
+const createVerifiedStranger = async (env: MultisigFixture): Promise<Keypair> => {
+  const stranger = Keypair.generate();
+
+  // Prove stranger is not among the multisig members and not the admin
+  const config = await env.program.account.config.fetch(env.config);
+  const memberKeys = config.members.slice(0, config.memberCount);
+  for (const member of memberKeys) {
+    assert.isFalse(
+      member.equals(stranger.publicKey),
+      "Stranger must not match any multisig member",
+    );
+  }
+  assert.isFalse(
+    config.admin.equals(stranger.publicKey),
+    "Stranger must not match multisig admin",
+  );
+
+  // Fund stranger with SOL for transaction execution fees
+  await processTransaction(
+    env.context,
+    new Transaction().add(
+      SystemProgram.transfer({
+        fromPubkey: env.payer.publicKey,
+        toPubkey: stranger.publicKey,
+        lamports: 1_000_000_000,
+      }),
+    ),
+    [env.payer],
+  );
+
+  return stranger;
 };
 
 describe("06-proposal-anyone-can-execute", () => {
@@ -51,7 +92,7 @@ describe("06-proposal-anyone-can-execute", () => {
     assert.isTrue(proposal.executed);
   });
 
-  it("a wallet that is not a member executes an approved proposal", async () => {
+  it("shows a freshly created stranger (definitely not a member) executing an approved proposal", async () => {
     const [admin, bob] = env.members;
     const bobTokens = env.memberTokens(bob.publicKey);
     const transfer = treasuryTransfer(env, bobTokens, oneToken().muln(30));
@@ -60,9 +101,39 @@ describe("06-proposal-anyone-can-execute", () => {
     await approve(env, 2, admin);
     await approve(env, 2, bob);
 
-    // env.stranger is not in env.members and not admin
+    // 1. Freshly create a stranger keypair right inside the test
+    const stranger = Keypair.generate();
+
+    // 2. Explicitly demonstrate that the stranger is not a member and not the admin
+    const config = await env.program.account.config.fetch(env.config);
+    const memberKeys = config.members.slice(0, config.memberCount);
+    for (const member of memberKeys) {
+      assert.isFalse(
+        member.equals(stranger.publicKey),
+        "Stranger must definitely not be a member of the multisig",
+      );
+    }
+    assert.isFalse(
+      config.admin.equals(stranger.publicKey),
+      "Stranger must definitely not be the multisig admin",
+    );
+
+    // 3. Fund stranger with SOL for transaction fees
+    await processTransaction(
+      env.context,
+      new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: env.payer.publicKey,
+          toPubkey: stranger.publicKey,
+          lamports: 1_000_000_000,
+        }),
+      ),
+      [env.payer],
+    );
+
+    // 4. Stranger executes the approved proposal
     const before = await tokenBalance(env.context, bobTokens);
-    await execute(env, 2, env.stranger, transfer);
+    await execute(env, 2, stranger, transfer);
     const after = await tokenBalance(env.context, bobTokens);
 
     assert.equal((after - before).toString(), oneToken().muln(30).toString());
@@ -79,8 +150,10 @@ describe("06-proposal-anyone-can-execute", () => {
     await createProposal(env, 3, bob, transfer);
     await approve(env, 3, bob);
 
+    const stranger = await createVerifiedStranger(env);
+
     await expectMultisigError(
-      execute(env, 3, env.stranger, transfer),
+      execute(env, 3, stranger, transfer),
       "NotApproved",
       6004,
     );
@@ -95,12 +168,14 @@ describe("06-proposal-anyone-can-execute", () => {
     await approve(env, 4, admin);
     await approve(env, 4, bob);
 
+    const stranger = await createVerifiedStranger(env);
+
     // First execution succeeds
-    await execute(env, 4, env.stranger, transfer);
+    await execute(env, 4, stranger, transfer);
 
     // Second execution must be refused
     await expectMultisigError(
-      execute(env, 4, env.stranger, transfer),
+      execute(env, 4, stranger, transfer),
       "AlreadyExecuted",
       6005,
     );
@@ -115,10 +190,12 @@ describe("06-proposal-anyone-can-execute", () => {
     await approve(env, 5, admin);
     await approve(env, 5, bob);
 
-    // Case A: Divert tokens by swapping destination with stranger's tokens
-    const fakeTransfer = treasuryTransfer(env, env.stranger.publicKey, oneToken().muln(15));
+    const stranger = await createVerifiedStranger(env);
+
+    // Case A: Divert tokens by swapping destination with stranger's public key
+    const fakeTransfer = treasuryTransfer(env, stranger.publicKey, oneToken().muln(15));
     await expectMultisigError(
-      execute(env, 5, env.stranger, fakeTransfer),
+      execute(env, 5, stranger, fakeTransfer),
       "AccountMismatch",
       6006,
     );
@@ -133,7 +210,7 @@ describe("06-proposal-anyone-can-execute", () => {
       { pubkey: transfer.programId, isSigner: false, isWritable: false },
     ];
     await expectMultisigError(
-      execute(env, 5, env.stranger, transfer, tamperedWritability),
+      execute(env, 5, stranger, transfer, tamperedWritability),
       "AccountMismatch",
       6006,
     );
@@ -148,7 +225,7 @@ describe("06-proposal-anyone-can-execute", () => {
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ];
     await expectMultisigError(
-      execute(env, 5, env.stranger, transfer, tamperedProgram),
+      execute(env, 5, stranger, transfer, tamperedProgram),
       "AccountMismatch",
       6006,
     );
@@ -160,7 +237,7 @@ describe("06-proposal-anyone-can-execute", () => {
       isWritable: k.isWritable,
     }));
     await expectMultisigError(
-      execute(env, 5, env.stranger, transfer, missingProgram),
+      execute(env, 5, stranger, transfer, missingProgram),
       "AccountMismatch",
       6006,
     );
@@ -188,9 +265,10 @@ describe("06-proposal-anyone-can-execute", () => {
     );
 
     // 3. Stranger CANNOT cancel an active proposal before expiry
+    const stranger = await createVerifiedStranger(env);
     await createProposal(env, 8, bob, transfer, 3600);
     await expectMultisigError(
-      cancel(env, 8, env.stranger),
+      cancel(env, 8, stranger),
       "NotAMember",
       6001,
     );
@@ -199,7 +277,7 @@ describe("06-proposal-anyone-can-execute", () => {
     const now = await getTime(env.context);
     await timeTravel(env.context, now + BigInt(7200));
 
-    await cancel(env, 8, env.stranger);
+    await cancel(env, 8, stranger);
     assert.isNull(
       await env.program.account.proposal.fetchNullable(env.proposal(8)),
       "Expired proposal account must be closed by stranger",
@@ -209,7 +287,7 @@ describe("06-proposal-anyone-can-execute", () => {
     await createProposal(env, 9, bob, transfer, 3600);
     await approve(env, 9, admin);
     await approve(env, 9, bob);
-    await execute(env, 9, env.stranger, transfer);
+    await execute(env, 9, stranger, transfer);
 
     await expectMultisigError(
       cancel(env, 9, bob),
