@@ -4,7 +4,7 @@ use anchor_spl::token::{transfer_checked, Mint, Token, TokenAccount, TransferChe
 
 use crate::{Config, RewardsError};
 
-/// A user buys tokens from the vault with lamports at the stored price.
+/// A user buys tokens from the vault with lamports at the current stored price.
 #[derive(Accounts)]
 pub struct Buy<'info> {
     #[account(mut)]
@@ -15,7 +15,13 @@ pub struct Buy<'info> {
     pub mint: Account<'info, Mint>,
     #[account(mut, token::mint = mint, token::authority = buyer)]
     pub buyer_tokens: Account<'info, TokenAccount>,
-    #[account(mut, seeds = [b"vault"], bump)]
+    #[account(
+        mut,
+        seeds = [b"vault"],
+        bump,
+        token::mint = mint,
+        token::authority = config,
+    )]
     pub vault: Account<'info, TokenAccount>,
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,

@@ -1,9 +1,20 @@
 import { BN } from "@coral-xyz/anchor";
-import { Keypair, PublicKey } from "@solana/web3.js";
+import {
+  Ed25519Program,
+  Keypair,
+  PublicKey,
+  SYSVAR_INSTRUCTIONS_PUBKEY,
+} from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
 import { sendIxs } from "../helpers";
 import { RewardsFixture } from "./fixture";
+
+export const oraclePriceMessage = (price: BN, publishTime: BN): Buffer =>
+  Buffer.concat([
+    price.toArrayLike(Buffer, "le", 8),
+    publishTime.toArrayLike(Buffer, "le", 8),
+  ]);
 
 export const accrue = async (
   env: RewardsFixture,
@@ -17,34 +28,49 @@ export const accrue = async (
   await sendIxs(env.context, [env.payer], ix);
 };
 
-export const payReward = async (
+export const claim = async (
   env: RewardsFixture,
   owner: PublicKey,
-  ownerTokens: PublicKey,
+  userTokens: PublicKey,
+  caller: Keypair = env.payer,
+  callerTokens: PublicKey = env.strangerTokens,
 ) => {
   const ix = await env.program.methods
-    .payReward()
+    .claim()
     .accountsPartial({
-      admin: env.payer.publicKey,
+      caller: caller.publicKey,
       user: env.userAccount(owner),
       mint: env.mint,
-      userTokens: ownerTokens,
+      userTokens,
+      callerTokens,
       tokenProgram: TOKEN_PROGRAM_ID,
     })
     .instruction();
-  await sendIxs(env.context, [env.payer], ix);
+  await sendIxs(env.context, [caller], ix);
 };
 
 export const setPrice = async (
   env: RewardsFixture,
   price: BN,
-  signer: Keypair = env.bot,
+  publishTime?: BN,
+  signer: Keypair = env.oracle,
+  caller: Keypair = env.payer,
 ) => {
+  const clock = await env.context.banksClient.getClock();
+  const time = publishTime ?? new BN(clock.unixTimestamp.toString());
+  const message = oraclePriceMessage(price, time);
+  const ed25519Ix = Ed25519Program.createInstructionWithPrivateKey({
+    privateKey: signer.secretKey,
+    message,
+  });
   const ix = await env.program.methods
-    .setPrice(price)
-    .accountsPartial({ bot: signer.publicKey })
+    .setPrice()
+    .accountsPartial({
+      caller: caller.publicKey,
+      instructions: SYSVAR_INSTRUCTIONS_PUBKEY,
+    })
     .instruction();
-  await sendIxs(env.context, [signer], ix);
+  await sendIxs(env.context, [caller], ed25519Ix, ix);
 };
 
 export const buy = async (
