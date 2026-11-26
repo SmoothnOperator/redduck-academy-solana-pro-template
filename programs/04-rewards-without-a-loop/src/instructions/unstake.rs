@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{transfer_checked, Mint, Token, TokenAccount, TransferChecked};
 
-use crate::{Pool, PoolError, Staker};
+use crate::{instructions::settle_staker, Pool, PoolError, Staker};
 
 #[derive(Accounts)]
 pub struct Unstake<'info> {
@@ -14,20 +14,36 @@ pub struct Unstake<'info> {
     pub mint: Account<'info, Mint>,
     #[account(mut, token::mint = mint, token::authority = owner)]
     pub owner_tokens: Account<'info, TokenAccount>,
-    #[account(mut, seeds = [b"vault"], bump)]
+    #[account(
+        mut,
+        seeds = [b"vault"],
+        bump,
+        token::mint = mint,
+        token::authority = pool,
+    )]
     pub vault: Account<'info, TokenAccount>,
     pub token_program: Program<'info, Token>,
 }
 
 pub fn unstake(ctx: Context<Unstake>, amount: u64) -> Result<()> {
+    require!(ctx.accounts.staker.stake >= amount, PoolError::InsufficientStake);
+
+    // Settle rewards owed on the prior stake BEFORE decreasing `staker.stake`.
+    let reward_per_token = ctx.accounts.pool.reward_per_token;
     let staker = &mut ctx.accounts.staker;
-    require!(staker.stake >= amount, PoolError::InsufficientStake);
-    staker.stake -= amount;
+    settle_staker(staker, reward_per_token)?;
+
+    staker.stake = staker
+        .stake
+        .checked_sub(amount)
+        .ok_or(PoolError::MathOverflow)?;
+
     let pool = &mut ctx.accounts.pool;
     pool.total_staked = pool
         .total_staked
         .checked_sub(amount)
         .ok_or(PoolError::MathOverflow)?;
+
     let seeds: &[&[u8]] = &[b"pool", &[pool.bump]];
     transfer_checked(
         CpiContext::new_with_signer(
