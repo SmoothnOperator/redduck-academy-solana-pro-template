@@ -12,4 +12,16 @@ pub enum RoundError {
     AlreadySettled,
     #[msg("The swap returned less than the minimum")]
     SlippageExceeded,
+    #[msg("The round settlement window has expired")]
+    RoundExpired,
+    #[msg("The refund delay has not passed yet")]
+    RefundNotReady,
+    #[msg("This entry has no stake to refund")]
+    NoStake,
+    #[msg("No DEX change is pending")]
+    NoPendingDex,
+    #[msg("The DEX change delay has not elapsed")]
+    DexChangeDelayNotPassed,
+    #[msg("Invalid DEX program")]
+    InvalidDex,
 }

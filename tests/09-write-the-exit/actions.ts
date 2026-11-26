@@ -1,4 +1,5 @@
 import { BN } from "@coral-xyz/anchor";
+import { PublicKey } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
 import { sendIxs } from "../helpers";
@@ -40,4 +41,48 @@ export const settle = async (env: RoundFixture, id: number, winner: Player) => {
     })
     .instruction();
   await sendIxs(env.context, [env.executor], ix);
+};
+
+export const refund = async (env: RoundFixture, id: number, player: Player) => {
+  const round = env.round(id);
+  const ix = await env.program.methods
+    .refund()
+    .accountsPartial({
+      player: player.keypair.publicKey,
+      round,
+      entry: env.entry(round, player.keypair.publicKey),
+      mint: env.mint,
+      playerTokens: player.tokens,
+      tokenProgram: TOKEN_PROGRAM_ID,
+    })
+    .instruction();
+  await sendIxs(env.context, [player.keypair], ix);
+};
+
+export const proposeDex = async (env: RoundFixture, newDex: PublicKey, admin = env.payer) => {
+  const ix = await env.program.methods
+    .proposeDex(newDex)
+    .accountsPartial({
+      admin: admin.publicKey,
+    })
+    .instruction();
+  await sendIxs(env.context, [admin], ix);
+};
+
+export const applyDex = async (env: RoundFixture, caller = env.payer) => {
+  const ix = await env.program.methods
+    .applyDex()
+    .accountsPartial({})
+    .instruction();
+  await sendIxs(env.context, [caller], ix);
+};
+
+export const cancelDex = async (env: RoundFixture, admin = env.payer) => {
+  const ix = await env.program.methods
+    .cancelDex()
+    .accountsPartial({
+      admin: admin.publicKey,
+    })
+    .instruction();
+  await sendIxs(env.context, [admin], ix);
 };
