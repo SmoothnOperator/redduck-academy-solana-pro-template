@@ -87,4 +87,27 @@ export const execute = async (
   await sendIxs(env.context, [executor], ix);
 };
 
+export const cancel = async (
+  env: MultisigFixture,
+  id: number,
+  caller: Keypair,
+  proposer?: PublicKey,
+) => {
+  const propPubkey = env.proposal(id);
+  let propAccount = proposer;
+  if (!propAccount) {
+    const data = await env.program.account.proposal.fetch(propPubkey);
+    propAccount = data.proposer;
+  }
+  const ix = await env.program.methods
+    .cancel()
+    .accountsPartial({
+      caller: caller.publicKey,
+      proposal: propPubkey,
+      proposer: propAccount,
+    })
+    .instruction();
+  await sendIxs(env.context, [caller], ix);
+};
+
 export { TOKEN_PROGRAM_ID };
