@@ -33,8 +33,8 @@ In the original program, the market relied on a centralized team bot calling `se
    - The protocol implements a **pull oracle pattern** (role inversion). The caller (e.g. the trader or anyone wishing to update the market) brings the signed price update directly in the same transaction as their trade.
 2. **What the program checks about it:**
    - **Instruction Sysvar & Precompile Execution:** The program inspects the preceding instruction loaded from the Instructions Sysvar (`sysvar::instructions::ID`).
-   - **Precompile Program ID & Layout:** It verifies via `parse_ed25519` that the preceding instruction was executed by the native Ed25519 precompile program (`ed25519_program::ID`) and parses the signed payload.
-   - **Oracle Authority:** It validates that the public key that signed the message strictly matches the protocol's configured oracle key (`require_keys_eq!(signed.pubkey, config.oracle)`).
+   - **Native Ed25519 Precompile Program ID & Layout:** The implementation of `parse_ed25519` inside `src/instructions/set_price.rs` explicitly validates that the instruction was executed by the native Ed25519 precompile (`ed25519_program::ID`), verifies the 16-byte header (`d[0] == 1`), validates internal offsets (`sig_ix == 0xffff`, `pk_ix == 0xffff`, `msg_ix == 0xffff`), and verifies bounds.
+   - **Oracle Authority:** It validates that the public key extracted by `parse_ed25519` strictly matches the protocol's configured oracle key (`require_keys_eq!(signed.pubkey, config.oracle)`).
    - **Message Parsing:** It extracts the price (`u64`) and publish timestamp (`i64`) from the 16-byte signed message payload.
 3. **What happens when the update is too old:**
    - The program compares the oracle's signed `publish_time` with the current on-chain timestamp (`Clock::get()?.unix_timestamp`).
