@@ -200,9 +200,9 @@ describe("02-find-the-root-of-trust", () => {
     );
     assert.isTrue(configData.admin.equals(env.payer.publicKey));
     assert.isTrue(configData.mint.equals(env.mint));
-    const allowedKeys = (configData as any).allowedKeys ?? (configData as any).keys;
-    assert.equal(allowedKeys.length, 1);
-    assert.isTrue(allowedKeys[0].equals(env.oracle.publicKey));
+    const keys = (configData as any).keys ?? (configData as any).allowedKeys;
+    assert.equal(keys.length, 1);
+    assert.isTrue(keys[0].equals(env.oracle.publicKey));
   });
 
   it("verifies deposit adds funds to the vault PDA using the config mint", async () => {
@@ -210,5 +210,42 @@ describe("02-find-the-root-of-trust", () => {
     await deposit(env, oneToken().muln(200));
     const vaultAfter = await tokenBalance(env.context, env.vault);
     assert.equal((vaultAfter - vaultBefore).toString(), oneToken().muln(200).toString());
+  });
+
+  it("rejects a withdrawal if config account is an arbitrary caller-supplied account (not program config PDA)", async () => {
+    const fakeConfig = Keypair.generate();
+    const signatureCheck = Ed25519Program.createInstructionWithPrivateKey({
+      privateKey: env.oracle.secretKey,
+      message: withdrawalMessage(env.vault, env.payerTokens, oneToken().muln(50)),
+    });
+    const ix = await env.program.methods
+      .withdraw(oneToken().muln(50))
+      .accountsPartial({
+        caller: env.payer.publicKey,
+        config: fakeConfig.publicKey,
+        mint: env.mint,
+        recipientTokens: env.payerTokens,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .instruction();
+
+    await expectReverted(
+      { revertedWith: { message: "ConstraintSeeds" } },
+      sendIxs(env.context, [env.payer], signatureCheck, ix),
+    );
+  });
+
+  it("verifies one root for every instruction: initialize, deposit, and withdraw share the same config PDA", async () => {
+    const configPda = PublicKey.findProgramAddressSync([Buffer.from("config")], env.program.programId)[0];
+    const vaultPda = PublicKey.findProgramAddressSync([Buffer.from("vault")], env.program.programId)[0];
+
+    assert.isTrue(env.config.equals(configPda));
+    assert.isTrue(env.vault.equals(vaultPda));
+
+    // Deposit uses config PDA and vault PDA
+    await deposit(env, oneToken().muln(50));
+
+    // Withdraw uses same config PDA and vault PDA
+    await withdraw(env, oneToken().muln(50), env.payerTokens);
   });
 });

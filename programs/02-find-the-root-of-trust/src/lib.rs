@@ -24,7 +24,13 @@ pub struct Deposit<'info> {
     pub mint: Account<'info, Mint>,
     #[account(mut, token::mint = mint, token::authority = depositor)]
     pub depositor_tokens: Account<'info, TokenAccount>,
-    #[account(mut, seeds = [b"vault"], bump)]
+    #[account(
+        mut,
+        seeds = [b"vault"],
+        bump,
+        token::mint = mint,
+        token::authority = config,
+    )]
     pub vault: Account<'info, TokenAccount>,
     pub token_program: Program<'info, Token>,
 }
@@ -33,8 +39,8 @@ pub struct Deposit<'info> {
 pub mod oracle_vault {
     use super::*;
 
-    pub fn initialize(ctx: Context<Initialize>, allowed_keys: Vec<Pubkey>) -> Result<()> {
-        instructions::initialize(ctx, allowed_keys)
+    pub fn initialize(ctx: Context<Initialize>, keys: Vec<Pubkey>) -> Result<()> {
+        instructions::initialize(ctx, keys)
     }
 
     pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
