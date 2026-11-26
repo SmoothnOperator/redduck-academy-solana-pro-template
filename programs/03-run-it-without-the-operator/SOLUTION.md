@@ -49,4 +49,4 @@ The only instructions that retain admin privileges are:
 **Why this is acceptable:**
 - **Rewards are an off-chain/business logic decision:** Deciding *who* earned rewards and *how much* is an inherent protocol-level business function that originates with the protocol issuer (e.g. protocol incentives, liquidity rewards, or platform activity).
 - **Execution is fully decentralized:** Once rewards are accrued, the admin has zero control over execution. The admin cannot block a user from receiving their funds, cannot redirect payouts, and does not need to run any server to pay rewards. Similarly, the market does not rely on any team bot to function.
-- The protocol's day-to-day operation is completely autonomous and operator-free.
+- **No operator path remains:** The old admin payout path (`pay_reward`) has been completely removed from the program. The old bot-dependent path (`set_price` requiring bot signature) has been replaced by the permissionless pull oracle verification, and calling it without a valid Ed25519 signature from `config.oracle` reverts with `NotEd25519`. The protocol's day-to-day operation is completely autonomous and operator-free.
