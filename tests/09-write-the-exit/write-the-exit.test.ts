@@ -88,13 +88,25 @@ describe("09-write-the-exit", () => {
       "Alice must recover her exact stake of 100 tokens",
     );
 
-    // Alice's entry account is now closed, so calling refund again fails
+    // Alice's entry account is now closed
     const aliceEntry = await env.program.account.entry.fetchNullable(
       env.entry(env.round(2), alice.keypair.publicKey),
     );
     assert.isNull(aliceEntry, "Alice entry account must be closed after refund");
 
-    // 4. Bob refunds his stake (50 tokens)
+    // 4. Repeated refund transaction MUST be attempted and verified to be rejected
+    let secondRefundFailed = false;
+    try {
+      await refund(env, 2, alice);
+    } catch (err: any) {
+      secondRefundFailed = true;
+    }
+    assert.isTrue(
+      secondRefundFailed,
+      "Calling refund a second time for the same player must be rejected",
+    );
+
+    // 5. Bob refunds his stake (50 tokens)
     const bobBefore = await tokenBalance(env.context, bob.tokens);
     await refund(env, 2, bob);
     const bobAfter = await tokenBalance(env.context, bob.tokens);
@@ -104,11 +116,52 @@ describe("09-write-the-exit", () => {
       "Bob must recover his exact stake of 50 tokens",
     );
 
-    // 5. Executor CANNOT settle after the refund delay has expired
+    // Bob attempting a second refund is also rejected
+    let bobSecondRefundFailed = false;
+    try {
+      await refund(env, 2, bob);
+    } catch (err: any) {
+      bobSecondRefundFailed = true;
+    }
+    assert.isTrue(
+      bobSecondRefundFailed,
+      "Calling refund a second time for Bob must be rejected",
+    );
+
+    // 6. Executor CANNOT settle after the refund delay has expired
     await expectRoundError(
       settle(env, 2, bob),
       "RoundExpired",
       6005,
+    );
+  });
+
+  it("rejects a second refund transaction for an already-refunded entry", async () => {
+    const [alice] = env.players;
+    const now = await getTime(env.context);
+    const deadline = now + 60n;
+    await openRound(env, 3, deadline);
+    await join(env, 3, alice, oneToken().muln(75));
+
+    // Time travel past deadline + REFUND_DELAY_SECONDS
+    await timeTravel(env.context, deadline + 3601n);
+
+    // First refund transaction succeeds
+    const before = await tokenBalance(env.context, alice.tokens);
+    await refund(env, 3, alice);
+    const after = await tokenBalance(env.context, alice.tokens);
+    assert.equal((after - before).toString(), oneToken().muln(75).toString());
+
+    // Explicitly execute and verify a second refund transaction is rejected
+    let secondAttemptFailed = false;
+    try {
+      await refund(env, 3, alice);
+    } catch (err: any) {
+      secondAttemptFailed = true;
+    }
+    assert.isTrue(
+      secondAttemptFailed,
+      "Second refund transaction must be rejected by the program",
     );
   });
 

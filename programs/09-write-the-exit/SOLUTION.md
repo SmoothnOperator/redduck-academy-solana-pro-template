@@ -42,18 +42,31 @@ Yes. The game's native accounting and pot distribution are denominated exclusive
 ## Dependency 3: the upgrade authority
 
 **Would the product make sense without it?**
-Yes. An upgrade authority is not an inherent operational requirement of the game protocol. Once the game contracts are audited, tested, and battle-proven, the upgrade authority can be permanently revoked (setting it to `None`), making the program immutable and completely trustless.
+Yes. An upgrade authority is not an inherent operational requirement of the game protocol. Once the game contracts are audited, tested, and battle-proven, the upgrade authority can be permanently revoked (setting the BPF upgrade authority to `None`), rendering the program fully immutable, trustless, and resilient against any key compromise or third-party failure.
 
 **The exit:**
+- **What triggers it:**
+  The exit is triggered by the completion of protocol milestones, security audits, and formal verification of the smart contract logic, or alternatively, by an operational or security incident (such as a vulnerability or compromise detected in the third-party multisig service) requiring an emergency migration away from the external provider.
+- **Who can trigger it:**
+  The current 2-of-3 third-party multisig signers must initiate the transaction to transfer the upgrade authority. Specifically, they execute `bpf_loader_upgradeable::set_upgrade_authority` to hand over control to a protocol-owned governance timelock (or revoke it permanently to `None`). Under the new timelocked governance system, future upgrades are initiated by protocol governance signers submitting a proposal through the timelock program.
+- **How long it takes:**
+  - Revoking the key to `None` (immutability) takes exactly 1 transaction (immediate and permanent).
+  - Migrating to a timelocked governance setup and any subsequent program upgrades take a mandatory on-chain delay of 72 hours (3 days). This timelock window ensures that every queued upgrade buffer is publicly inspectable and provides users with a 72-hour escape window to withdraw all stakes before new code can become active.
 - **What you would change about who holds the key and how a change takes effect:**
-  1. Transfer the upgrade authority from the 2-of-3 third-party multisig to a protocol-controlled governance multisig with a broader threshold (e.g. 4-of-7 composed of core team, security council, and community representatives).
-  2. Enforce a mandatory on-chain **timelock** (e.g. 48 to 72 hours via a Squads timelock program or governance buffer) on any program upgrade. Any new program buffer deployment must be announced and held in escrow for the full timelock period before execution.
-  3. Include an emergency veto/cancellation power held by a dedicated Security Council to abort unauthorized upgrade proposals during the timelock window.
-  4. Eventually, permanently revoke the upgrade authority once the game has reached stability.
+  1. **Key Ownership:** Strip the third-party service of unilateral upgrade control. Transfer the upgrade authority to an internal protocol governance multisig with a broader threshold (e.g. 4-of-7 composed of core team developers, independent security auditors, and community delegates).
+  2. **Mandatory Timelock Delay:** Place an on-chain timelock contract (such as a Squads v4 timelock buffer or dedicated governance escrow) between the multisig and the BPF loader. Any proposed program deployment must sit queued on-chain for at least 72 hours before it can be executed.
+  3. **Veto / Cancellation Mechanism:** Empower a dedicated Security Council to unilaterally cancel or veto a queued upgrade during the 72-hour window if malicious byte modifications are discovered.
+  4. **Path to Immutability:** Permanently set the upgrade authority to `None` once feature development has concluded.
 
 **If the key were stolen:**
 - **What someone could do with it today:**
-  Because the current setup is a 2-of-3 third-party multisig with **no timelock**, an attacker who compromises 2 signers can execute an instant upgrade in a single transaction (`bpf_loader_upgradeable::upgrade`). The attacker could deploy an arbitrary program that immediately drains all funds from the `vault` PDA, steals active pots, bypasses entry records, or rugs all player balances with zero warning or recourse.
+  Because the current setup is a 2-of-3 third-party multisig with **no timelock**, an attacker who compromises 2 signers can execute an instant upgrade in a single block (`bpf_loader_upgradeable::upgrade`). The attacker could deploy an arbitrary program that immediately drains all funds from the `vault` PDA, steals active pots, bypasses entry records, or rugs all player balances with zero warning or recourse.
+- **What limits the damage with the exit:**
+  With the proposed exit architecture (72-hour timelock and Security Council veto):
+  1. An attacker with compromised multisig keys can only queue an upgrade; they cannot execute it immediately.
+  2. The queued upgrade is visible on-chain to community monitoring services and bots for 72 hours.
+  3. The Security Council can cancel the malicious upgrade before activation.
+  4. Even if cancellation fails, players have 72 hours to exit all rounds and withdraw their funds before the malicious code is applied.
 
 ---
 
