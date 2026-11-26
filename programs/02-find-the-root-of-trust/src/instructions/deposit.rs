@@ -12,13 +12,7 @@ pub struct Deposit<'info> {
     pub mint: Account<'info, Mint>,
     #[account(mut, token::mint = mint, token::authority = depositor)]
     pub depositor_tokens: Account<'info, TokenAccount>,
-    #[account(
-        mut,
-        seeds = [b"vault"],
-        bump,
-        token::mint = mint,
-        token::authority = config,
-    )]
+    #[account(mut, seeds = [b"vault"], bump)]
     pub vault: Account<'info, TokenAccount>,
     pub token_program: Program<'info, Token>,
 }

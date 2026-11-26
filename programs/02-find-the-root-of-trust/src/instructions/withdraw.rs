@@ -11,13 +11,7 @@ pub struct Withdraw<'info> {
     pub config: Account<'info, Config>,
     #[account(address = config.mint)]
     pub mint: Account<'info, Mint>,
-    #[account(
-        mut,
-        seeds = [b"vault"],
-        bump,
-        token::mint = mint,
-        token::authority = config,
-    )]
+    #[account(mut, seeds = [b"vault"], bump)]
     pub vault: Account<'info, TokenAccount>,
     #[account(mut, token::mint = mint)]
     pub recipient_tokens: Account<'info, TokenAccount>,
@@ -51,7 +45,7 @@ pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
     );
     let signed = parse_ed25519(&signature_check)?;
     require!(
-        ctx.accounts.config.keys.contains(&signed.pubkey),
+        ctx.accounts.config.allowed_keys.contains(&signed.pubkey),
         VaultError::KeyNotAllowed
     );
     let expected = withdrawal_message(

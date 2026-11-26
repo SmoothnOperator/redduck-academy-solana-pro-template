@@ -154,7 +154,7 @@ describe("02-find-the-root-of-trust", () => {
     );
   });
 
-  it("rejects an unauthorized signer not in config keys", async () => {
+  it("rejects an unauthorized signer not in config allowed_keys", async () => {
     const unauthorizedOracle = Keypair.generate();
     await expectReverted(
       { revertedWith: { message: "KeyNotAllowed" } },
@@ -191,8 +191,9 @@ describe("02-find-the-root-of-trust", () => {
     );
     assert.isTrue(configData.admin.equals(env.payer.publicKey));
     assert.isTrue(configData.mint.equals(env.mint));
-    assert.equal(configData.keys.length, 1);
-    assert.isTrue(configData.keys[0].equals(env.oracle.publicKey));
+    const allowedKeys = (configData as any).allowedKeys ?? (configData as any).keys;
+    assert.equal(allowedKeys.length, 1);
+    assert.isTrue(allowedKeys[0].equals(env.oracle.publicKey));
   });
 
   it("verifies deposit adds funds to the vault PDA using the config mint", async () => {
