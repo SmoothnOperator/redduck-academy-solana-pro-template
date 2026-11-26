@@ -1,9 +1,11 @@
 import { assert } from "chai";
+import * as crypto from "crypto";
 import {
   Ed25519Program,
   Keypair,
   PublicKey,
   SystemProgram,
+  TransactionInstruction,
 } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
@@ -20,7 +22,7 @@ import { withdraw, withdrawalMessage } from "./actions";
  * - u16 data length
  * - raw instruction data
  */
-export function buildFakeInstructionsSysvar(ed25519IxData: Buffer): Buffer {
+export function buildFakeInstructionsSysvar(ed25519IxData: Buffer, programId: PublicKey = Ed25519Program.programId): Buffer {
   const countBuf = Buffer.alloc(2);
   countBuf.writeUInt16LE(1, 0);
 
@@ -30,7 +32,7 @@ export function buildFakeInstructionsSysvar(ed25519IxData: Buffer): Buffer {
   const numAccountsBuf = Buffer.alloc(2);
   numAccountsBuf.writeUInt16LE(0, 0);
 
-  const programIdBuf = Ed25519Program.programId.toBuffer();
+  const programIdBuf = programId.toBuffer();
 
   const dataLenBuf = Buffer.alloc(2);
   dataLenBuf.writeUInt16LE(ed25519IxData.length, 0);
@@ -68,24 +70,13 @@ describe("02-find-the-root-of-trust", () => {
     const fakeOracle = Keypair.generate();
     const amount = oneToken().muln(100);
 
-    // 1. Create a fake allowlist with the attacker's fake oracle key
-    const fakeAllowlist = Keypair.generate();
-    const allowlistIx = await env.program.methods
-      .createAllowlist([fakeOracle.publicKey])
-      .accountsPartial({
-        authority: env.payer.publicKey,
-        allowlist: fakeAllowlist.publicKey,
-      })
-      .instruction();
-    await sendIxs(env.context, [env.payer, fakeAllowlist], allowlistIx);
-
-    // 2. Synthesize an Ed25519 signature from the fake oracle
+    // 1. Synthesize an Ed25519 signature payload for fakeOracle
     const ed25519Ix = Ed25519Program.createInstructionWithPrivateKey({
       privateKey: fakeOracle.secretKey,
       message: withdrawalMessage(env.vault, env.payerTokens, amount),
     });
 
-    // 3. Synthesize a fake instructions sysvar account containing the forged Ed25519 payload
+    // 2. Synthesize a fake instructions sysvar account containing the forged Ed25519 payload
     const fakeSysvarData = buildFakeInstructionsSysvar(ed25519Ix.data);
     const fakeSysvar = Keypair.generate();
     env.context.setAccount(fakeSysvar.publicKey, {
@@ -96,15 +87,31 @@ describe("02-find-the-root-of-trust", () => {
       rentEpoch: 0,
     });
 
-    // 4. In the unfixed program, passing fakeSysvar and fakeAllowlist drains the vault.
-    // In the fixed program, this fails because:
-    // - instructions account address is validated to equal sysvar::instructions::ID
-    // - the allowed keys are read from the config PDA, not caller's allowlist
+    // 3. Attacker injects a fake allowlist account in bankrun containing their fakeOracle key
+    const fakeAllowlist = Keypair.generate();
+    const disc = crypto.createHash("sha256").update("account:Allowlist").digest().subarray(0, 8);
+    const vecLenBuf = Buffer.alloc(4);
+    vecLenBuf.writeUInt32LE(1, 0);
+    const allowlistData = Buffer.concat([
+      disc,
+      env.payer.publicKey.toBuffer(),
+      vecLenBuf,
+      fakeOracle.publicKey.toBuffer(),
+    ]);
+    env.context.setAccount(fakeAllowlist.publicKey, {
+      lamports: 1_000_000_000,
+      data: allowlistData,
+      owner: env.program.programId,
+      executable: false,
+      rentEpoch: 0,
+    });
+
+    // 4. In the unfixed program, withdrawing with fakeSysvar and fakeAllowlist succeeds in draining the vault.
+    // In the fixed program, instructions is validated against sysvar::instructions::ID and rejected.
     const ix = await env.program.methods
       .withdraw(amount)
       .accountsPartial({
         caller: env.payer.publicKey,
-        allowlist: fakeAllowlist.publicKey,
         mint: env.mint,
         recipientTokens: env.payerTokens,
         instructions: fakeSysvar.publicKey,
@@ -118,6 +125,27 @@ describe("02-find-the-root-of-trust", () => {
     );
   });
 
+  it("rejects a withdrawal when the preceding instruction is not an Ed25519 program instruction", async () => {
+    // Instruction with wrong program ID (SystemProgram instead of Ed25519Program)
+    const fakeSigIx = new TransactionInstruction({
+      programId: SystemProgram.programId,
+      keys: [],
+      data: Buffer.alloc(32),
+    });
+
+    await expectReverted(
+      { revertedWith: { message: "NotEd25519" } },
+      withdraw(
+        env,
+        oneToken().muln(50),
+        env.payerTokens,
+        env.oracle,
+        undefined,
+        fakeSigIx,
+      ),
+    );
+  });
+
   it("rejects a withdrawal with a wrong instructions account address", async () => {
     const randomAccount = Keypair.generate().publicKey;
     await expectReverted(
@@ -126,7 +154,7 @@ describe("02-find-the-root-of-trust", () => {
     );
   });
 
-  it("rejects an unauthorized signer not in config allowed_keys", async () => {
+  it("rejects an unauthorized signer not in config keys", async () => {
     const unauthorizedOracle = Keypair.generate();
     await expectReverted(
       { revertedWith: { message: "KeyNotAllowed" } },
@@ -155,5 +183,30 @@ describe("02-find-the-root-of-trust", () => {
         mismatchedSigCheck,
       ),
     );
+  });
+
+  it("verifies initialize sets up the config PDA with allowed keys and vault authority", async () => {
+    const configData = await env.program.account.config.fetch(
+      PublicKey.findProgramAddressSync([Buffer.from("config")], env.program.programId)[0]
+    );
+    assert.isTrue(configData.admin.equals(env.payer.publicKey));
+    assert.isTrue(configData.mint.equals(env.mint));
+    assert.equal(configData.keys.length, 1);
+    assert.isTrue(configData.keys[0].equals(env.oracle.publicKey));
+  });
+
+  it("verifies deposit adds funds to the vault PDA using the config mint", async () => {
+    const vaultBefore = await tokenBalance(env.context, env.vault);
+    const depositIx = await env.program.methods
+      .deposit(oneToken().muln(200))
+      .accountsPartial({
+        depositor: env.payer.publicKey,
+        mint: env.mint,
+        depositorTokens: env.payerTokens,
+      })
+      .instruction();
+    await sendIxs(env.context, [env.payer], depositIx);
+    const vaultAfter = await tokenBalance(env.context, env.vault);
+    assert.equal((vaultAfter - vaultBefore).toString(), oneToken().muln(200).toString());
   });
 });

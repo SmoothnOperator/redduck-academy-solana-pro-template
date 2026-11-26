@@ -4,6 +4,7 @@ import {
   Keypair,
   PublicKey,
   SYSVAR_INSTRUCTIONS_PUBKEY,
+  TransactionInstruction,
 } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
@@ -28,7 +29,7 @@ export const withdraw = async (
   recipientTokens: PublicKey,
   signer: Keypair = env.oracle,
   instructions: PublicKey = SYSVAR_INSTRUCTIONS_PUBKEY,
-  overrideSignatureCheck?: any,
+  overrideSignatureCheck?: TransactionInstruction,
 ) => {
   const signatureCheck =
     overrideSignatureCheck ??
@@ -40,7 +41,6 @@ export const withdraw = async (
     .withdraw(amount)
     .accountsPartial({
       caller: env.payer.publicKey,
-      allowlist: env.allowlist,
       mint: env.mint,
       recipientTokens,
       instructions,

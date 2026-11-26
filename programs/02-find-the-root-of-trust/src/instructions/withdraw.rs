@@ -11,7 +11,13 @@ pub struct Withdraw<'info> {
     pub config: Account<'info, Config>,
     #[account(address = config.mint)]
     pub mint: Account<'info, Mint>,
-    #[account(mut, seeds = [b"vault"], bump)]
+    #[account(
+        mut,
+        seeds = [b"vault"],
+        bump,
+        token::mint = mint,
+        token::authority = config,
+    )]
     pub vault: Account<'info, TokenAccount>,
     #[account(mut, token::mint = mint)]
     pub recipient_tokens: Account<'info, TokenAccount>,
@@ -38,6 +44,11 @@ pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
     );
 
     let signature_check = load_instruction_unchecked(0, &ctx.accounts.instructions)?;
+    require_keys_eq!(
+        signature_check.program_id,
+        anchor_lang::solana_program::ed25519_program::ID,
+        VaultError::NotEd25519
+    );
     let signed = parse_ed25519(&signature_check)?;
     require!(
         ctx.accounts.config.keys.contains(&signed.pubkey),
