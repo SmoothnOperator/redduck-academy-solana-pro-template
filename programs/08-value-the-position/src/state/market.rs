@@ -11,6 +11,10 @@ pub struct Market {
     pub max_price_age: u64,
     pub borrow_ltv_bps: u16,
     pub liquidation_ltv_bps: u16,
+    /// Internal time-weighted average of the collateral price.
+    pub collateral_twap: u64,
+    /// Timestamp when collateral_twap was last updated.
+    pub last_update_time: i64,
     pub bump: u8,
 }
 
